@@ -140,7 +140,7 @@ This was tested, not only reasoned about: see [Tests](#tests).
 |---|---|---|
 | Engulfing, Hammer and Hanging Man, Inverted Hammer and Shooting Star, Doji, Morning Star and Evening Star, Harami, Piercing Line and Dark Cloud Cover | all on | Switch a group of patterns on or off |
 | Short labels | on | Write the short name next to each arrow (hover for full names). TradingView keeps the latest 500 labels |
-| Bullish, Bearish | green, red | Colours |
+| Bullish, Bearish | `#089981`, `#F23645` | Colours (TradingView's own candle colours by default) |
 | Label size | tiny | tiny, small or normal |
 
 Every input has a tooltip in the settings dialog. Two hidden plots, "Bullish patterns (bit mask)" and "Bearish patterns

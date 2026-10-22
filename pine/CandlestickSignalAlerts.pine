@@ -27,8 +27,8 @@ bool useHarami    = input.bool(true, "Harami", group = GROUP_PATTERNS, tooltip =
 bool usePiercing  = input.bool(true, "Piercing Line and Dark Cloud Cover", group = GROUP_PATTERNS, tooltip = "The bar opens beyond the previous close and closes past the middle of the previous full body, but not beyond it.")
 
 bool  showLabels = input.bool(true, "Short labels", group = GROUP_DISPLAY, tooltip = "Write the short name of each pattern next to its arrow. Hover a label for the full names. TradingView keeps the latest 500 labels.")
-color bullColor  = input.color(color.rgb(38, 166, 98), "Bullish", group = GROUP_DISPLAY, inline = "colors")
-color bearColor  = input.color(color.rgb(226, 74, 70), "Bearish", group = GROUP_DISPLAY, inline = "colors")
+color bullColor  = input.color(#089981, "Bullish", group = GROUP_DISPLAY, inline = "colors")
+color bearColor  = input.color(#F23645, "Bearish", group = GROUP_DISPLAY, inline = "colors")
 string labelSize = input.string(size.tiny, "Label size", options = [size.tiny, size.small, size.normal], group = GROUP_DISPLAY)
 
 // ───────────────────────────── Pattern table ─────────────────────────────
