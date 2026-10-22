@@ -1,0 +1,222 @@
+// This source code is subject to the terms of the PolyForm Noncommercial License 1.0.0
+// https://polyformproject.org/licenses/noncommercial/1.0.0/
+// © allanninal
+
+//@version=6
+
+//@description Candlestick Signal Alerts: 13 classic candlestick patterns, marked on the closed bar that completes them.
+// Patterns that need a prior trend read it from close vs EMA(20); body and range are compared with the average of the
+// 10 bars before. Closed bars only, so a mark never moves or disappears. The exact rules are tests/reference.py.
+indicator("Candlestick Signal Alerts", shorttitle = "Candle Alerts", overlay = true, max_labels_count = 500)
+
+// ───────────────────────────── Constants ─────────────────────────────
+const int   EMA_LEN = 20       // trend before a pattern: close vs EMA(20)
+const int   AVG_LEN = 10       // average body and range of the 10 bars before the current one
+const float TIE     = 1e-9     // values within 1e-9 x price count as equal, so rounding noise decides nothing
+
+const string GROUP_PATTERNS = "Patterns"
+const string GROUP_DISPLAY  = "Display"
+
+// ───────────────────────────── Inputs ─────────────────────────────
+bool useEngulfing = input.bool(true, "Engulfing", group = GROUP_PATTERNS, tooltip = "Bullish and Bearish Engulfing: the body of the bar engulfs the opposite-colour body before it, after a move against it.")
+bool useHammer    = input.bool(true, "Hammer and Hanging Man", group = GROUP_PATTERNS, tooltip = "Lower shadow at least 2x the body and 60% of the range, almost no upper shadow. Hammer after a fall, Hanging Man after a rise.")
+bool useInverted  = input.bool(true, "Inverted Hammer and Shooting Star", group = GROUP_PATTERNS, tooltip = "Upper shadow at least 2x the body and 60% of the range, almost no lower shadow. Inverted Hammer after a fall, Shooting Star after a rise.")
+bool useDoji      = input.bool(true, "Doji", group = GROUP_PATTERNS, tooltip = "Body at most 5% of the range, range at least half the average. Marked against the trend before it.")
+bool useStars     = input.bool(true, "Morning Star and Evening Star", group = GROUP_PATTERNS, tooltip = "Three bars: a full body, a small body that gaps past its close, then a close beyond the middle of the first body.")
+bool useHarami    = input.bool(true, "Harami", group = GROUP_PATTERNS, tooltip = "A smaller opposite-colour body inside a full body, after a move in the direction of the full body.")
+bool usePiercing  = input.bool(true, "Piercing Line and Dark Cloud Cover", group = GROUP_PATTERNS, tooltip = "The bar opens beyond the previous close and closes past the middle of the previous full body, but not beyond it.")
+
+bool  showLabels = input.bool(true, "Short labels", group = GROUP_DISPLAY, tooltip = "Write the short name of each pattern next to its arrow. Hover a label for the full names. TradingView keeps the latest 500 labels.")
+color bullColor  = input.color(color.rgb(38, 166, 98), "Bullish", group = GROUP_DISPLAY, inline = "colors")
+color bearColor  = input.color(color.rgb(226, 74, 70), "Bearish", group = GROUP_DISPLAY, inline = "colors")
+string labelSize = input.string(size.tiny, "Label size", options = [size.tiny, size.small, size.normal], group = GROUP_DISPLAY)
+
+// ───────────────────────────── Pattern table ─────────────────────────────
+// Index = bit in the pattern masks (the same numbering as the MetaTrader editions).
+var array<string> PATTERN_NAMES = array.from("Bullish Engulfing", "Bearish Engulfing", "Hammer", "Hanging Man", "Inverted Hammer", "Shooting Star", "Doji", "Morning Star", "Evening Star", "Bullish Harami", "Bearish Harami", "Piercing Line", "Dark Cloud Cover")
+var array<string> PATTERN_SHORT = array.from("ENG", "ENG", "HAM", "HANG", "IHAM", "STAR", "DOJI", "MSTAR", "ESTAR", "HAR", "HAR", "PIER", "DCC")
+var array<bool>   PATTERN_ON    = array.from(useEngulfing, useEngulfing, useHammer, useHammer, useInverted, useInverted, useDoji, useStars, useStars, useHarami, useHarami, usePiercing, usePiercing)
+
+// ───────────────────────────── Functions ─────────────────────────────
+float tol = TIE * math.abs(close)
+
+//@function Greater than or equal, with the tie tolerance of the current bar.
+//@param x Left value.
+//@param y Right value.
+//@returns true when x >= y - tolerance.
+ge(float x, float y) => x >= y - tol
+
+//@function Less than or equal, with the tie tolerance of the current bar.
+//@param x Left value.
+//@param y Right value.
+//@returns true when x <= y + tolerance.
+le(float x, float y) => x <= y + tol
+
+//@function Strictly greater, with the tie tolerance of the current bar.
+//@param x Left value.
+//@param y Right value.
+//@returns true when x > y + tolerance.
+gt(float x, float y) => x > y + tol
+
+//@function Strictly less, with the tie tolerance of the current bar.
+//@param x Left value.
+//@param y Right value.
+//@returns true when x < y - tolerance.
+lt(float x, float y) => x < y - tol
+
+//@function Bit value of a pattern index, used to build the masks.
+//@param i Pattern index.
+//@returns 2 to the power i.
+bit(int i) => int(math.pow(2, i))
+
+//@function Joins the names of the patterns whose bit is set in a mask.
+//@param mask Pattern bit mask.
+//@param names Name table (full or short).
+//@param sep Separator.
+//@returns The joined names, or "" for an empty mask.
+maskNames(int mask, array<string> names, string sep) =>
+    string out = ""
+    int m = mask
+    for i = 0 to array.size(names) - 1
+        if m % 2 == 1
+            out := out == "" ? array.get(names, i) : out + sep + array.get(names, i)
+        m := int(m / 2)
+    out
+
+// ───────────────────────────── Calculations ─────────────────────────────
+// EMA(20) of closes, seeded with the SMA of the first 20 closes (as the reference; ta.ema seeds differently).
+var float emaSum = 0.0
+var float emaVal = na
+if bar_index < EMA_LEN - 1
+    emaSum += close
+else if bar_index == EMA_LEN - 1
+    emaSum += close
+    emaVal := emaSum / EMA_LEN
+else
+    emaVal := emaVal + 2.0 / (EMA_LEN + 1) * (close - emaVal)
+
+//@function Trend at a bar in the past: +1 close above the EMA, -1 below, 0 unknown or equal.
+//@param j Bars back.
+//@returns +1, -1 or 0.
+trendAt(int j) =>
+    float e = emaVal[j]
+    float c = close[j]
+    na(e) ? 0 : gt(c, e) ? 1 : lt(c, e) ? -1 : 0
+
+float body   = math.abs(close - open)
+float rng    = high - low
+float upper  = high - math.max(open, close)
+float lower  = math.min(open, close) - low
+bool  isBull = close > open
+bool  isBear = close < open
+
+// Average body and range of the 10 bars before this one, summed oldest first like the reference.
+float avgBody  = na
+float avgRange = na
+if bar_index >= AVG_LEN
+    float sumBody  = 0.0
+    float sumRange = 0.0
+    for j = AVG_LEN to 1
+        sumBody  += body[j]
+        sumRange += rng[j]
+    avgBody  := sumBody / AVG_LEN
+    avgRange := sumRange / AVG_LEN
+
+int t1 = trendAt(1)
+int t2 = trendAt(2)
+int t3 = trendAt(3)
+
+int bullMask = 0
+int bearMask = 0
+if not na(avgBody) and bar_index >= 3
+    // Bars: 2 = two bars ago, 1 = previous, current = the bar that completes the pattern.
+    float prevBody = body[1]
+    float firstBody = body[2]
+    bool  prevBull = isBull[1]
+    bool  prevBear = isBear[1]
+    float prevMid  = (open[1] + close[1]) / 2
+    float firstMid = (open[2] + close[2]) / 2
+
+    // 0/1 Engulfing
+    if prevBear and isBull and le(open, close[1]) and ge(close, open[1]) and gt(body, prevBody) and t2 < 0
+        bullMask += bit(0)
+    if prevBull and isBear and ge(open, close[1]) and le(close, open[1]) and gt(body, prevBody) and t2 > 0
+        bearMask += bit(1)
+    // 2-6 single-bar shapes
+    if gt(rng, 0)
+        bool hammer   = ge(lower, 2 * body) and le(upper, 0.1 * rng) and ge(lower, 0.6 * rng)
+        bool inverted = ge(upper, 2 * body) and le(lower, 0.1 * rng) and ge(upper, 0.6 * rng)
+        if hammer and t1 < 0
+            bullMask += bit(2)
+        if hammer and t1 > 0
+            bearMask += bit(3)
+        if inverted and t1 < 0
+            bullMask += bit(4)
+        if inverted and t1 > 0
+            bearMask += bit(5)
+        // A doji is marked against the trend before it.
+        if le(body, 0.05 * rng) and ge(rng, 0.5 * avgRange) and t1 != 0
+            if t1 < 0
+                bullMask += bit(6)
+            else
+                bearMask += bit(6)
+    // 7/8 Morning and Evening Star
+    if isBear[2] and ge(firstBody, avgBody) and le(prevBody, 0.3 * firstBody) and le(math.min(open[1], close[1]), close[2]) and isBull and gt(close, firstMid) and t3 < 0
+        bullMask += bit(7)
+    if isBull[2] and ge(firstBody, avgBody) and le(prevBody, 0.3 * firstBody) and ge(math.max(open[1], close[1]), close[2]) and isBear and lt(close, firstMid) and t3 > 0
+        bearMask += bit(8)
+    // 9/10 Harami
+    if prevBear and ge(prevBody, avgBody) and isBull and ge(open, close[1]) and le(close, open[1]) and lt(body, prevBody) and t2 < 0
+        bullMask += bit(9)
+    if prevBull and ge(prevBody, avgBody) and isBear and le(open, close[1]) and ge(close, open[1]) and lt(body, prevBody) and t2 > 0
+        bearMask += bit(10)
+    // 11/12 Piercing Line and Dark Cloud Cover
+    if prevBear and ge(prevBody, avgBody) and isBull and le(open, close[1]) and gt(close, prevMid) and lt(close, open[1]) and t2 < 0
+        bullMask += bit(11)
+    if prevBull and ge(prevBody, avgBody) and isBear and ge(open, close[1]) and lt(close, prevMid) and gt(close, open[1]) and t2 > 0
+        bearMask += bit(12)
+
+//@function Removes the patterns that are switched off from a mask.
+//@param mask Pattern bit mask.
+//@returns The mask with only the enabled patterns.
+enabledOnly(int mask) =>
+    int out = 0
+    int m = mask
+    for i = 0 to array.size(PATTERN_ON) - 1
+        if m % 2 == 1 and array.get(PATTERN_ON, i)
+            out += bit(i)
+        m := int(m / 2)
+    out
+
+bullMask := enabledOnly(bullMask)
+bearMask := enabledOnly(bearMask)
+
+// Only a closed bar counts: on the live bar nothing is drawn or alerted until it closes.
+bool closed  = barstate.isconfirmed
+bool bullNow = closed and bullMask > 0
+bool bearNow = closed and bearMask > 0
+
+// ───────────────────────────── Plots ─────────────────────────────
+plotshape(bullNow, "Bullish pattern", shape.triangleup, location.belowbar, bullColor, size = size.tiny)
+plotshape(bearNow, "Bearish pattern", shape.triangledown, location.abovebar, bearColor, size = size.tiny)
+// The masks, for the Data Window and for other scripts: bit i = pattern i in the table above.
+plot(closed ? bullMask : na, "Bullish patterns (bit mask)", display = display.data_window)
+plot(closed ? bearMask : na, "Bearish patterns (bit mask)", display = display.data_window)
+
+if showLabels and bullNow
+    label.new(bar_index, low, maskNames(bullMask, PATTERN_SHORT, " "), yloc = yloc.belowbar, style = label.style_none, textcolor = bullColor, size = labelSize, tooltip = maskNames(bullMask, PATTERN_NAMES, ", "))
+if showLabels and bearNow
+    label.new(bar_index, high, maskNames(bearMask, PATTERN_SHORT, " "), yloc = yloc.abovebar, style = label.style_none, textcolor = bearColor, size = labelSize, tooltip = maskNames(bearMask, PATTERN_NAMES, ", "))
+
+// ───────────────────────────── Alerts ─────────────────────────────
+// One alert per closed bar, naming every pattern it completed. Create it with "Any alert() function call".
+if bullNow or bearNow
+    string msg = syminfo.ticker + " " + timeframe.period + ": "
+    if bullNow
+        msg += "bullish " + maskNames(bullMask, PATTERN_NAMES, ", ")
+    if bearNow
+        msg += (bullNow ? "; " : "") + "bearish " + maskNames(bearMask, PATTERN_NAMES, ", ")
+    alert(msg, alert.freq_once_per_bar_close)
+
+alertcondition(bullNow, "Bullish pattern", "Bullish candlestick pattern on {{ticker}} {{interval}}")
+alertcondition(bearNow, "Bearish pattern", "Bearish candlestick pattern on {{ticker}} {{interval}}")
